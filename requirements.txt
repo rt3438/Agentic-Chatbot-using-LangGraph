@@ -1,0 +1,12 @@
+langgraph
+langchain-openai
+python-dotenv
+pydantic
+streamlit
+langgraph-checkpoint-sqlite
+langchain-tavily
+tavily-python
+langchain-text-splitters
+langchain-community
+faiss-cpu
+pypdf
