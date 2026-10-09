@@ -27,9 +27,11 @@ jobs:
     environment: production
 
     steps:
+      # 1. Checkout source code
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # 2. Validate required GitHub configuration
       - name: Validate required GitHub configuration
         shell: bash
         env:
@@ -64,22 +66,26 @@ jobs:
             exit 1
           fi
 
+      # 3. Set up Python for CI validation
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
 
+      # 4. Install dependencies
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # 5. Validate main Python files
       - name: Validate Python files
         run: |
           python -m py_compile app.py
           python -m py_compile backend.py
 
+      # 6. Run tests if present
       - name: Run tests if present
         shell: bash
         run: |
@@ -89,12 +95,50 @@ jobs:
             echo "No tests/ directory found; skipping pytest."
           fi
 
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      # 7. Test Docker Hub connectivity
+      - name: Test Docker Hub connectivity
+        shell: bash
+        run: |
+          echo "Testing Docker registry endpoint..."
+          curl -I \
+            --connect-timeout 10 \
+            --max-time 20 \
+            https://registry-1.docker.io/v2/ || true
 
+          echo "Testing Docker authentication endpoint..."
+          curl -I \
+            --connect-timeout 10 \
+            --max-time 20 \
+            https://auth.docker.io/ || true
+
+      # 8. Log in to Docker Hub with retry
+      - name: Log in to Docker Hub
+        shell: bash
+        env:
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          for attempt in 1 2 3; do
+            echo "Docker Hub login attempt $attempt of 3..."
+
+            if echo "$DOCKERHUB_TOKEN" | docker login \
+              --username "$DOCKERHUB_USERNAME" \
+              --password-stdin; then
+
+              echo "✅ Docker Hub login successful"
+              exit 0
+            fi
+
+            if [ "$attempt" -lt 3 ]; then
+              echo "⚠️ Docker Hub login failed or timed out. Retrying in 20 seconds..."
+              sleep 20
+            fi
+          done
+
+          echo "❌ Docker Hub login failed after 3 attempts."
+          exit 1
+
+      # 9. Build and push Docker image
       - name: Build and push Docker image
         id: docker-image
         shell: bash
@@ -112,19 +156,21 @@ jobs:
 
           echo "image_uri=${IMAGE_SHA}" >> "$GITHUB_OUTPUT"
 
+      # 10. Authenticate GitHub Actions to AWS with OIDC
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v6.3.0
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
+      # 11. Validate EC2 runtime configuration and deploy
       - name: Deploy Docker image to EC2
         id: deploy
         shell: bash
         env:
           IMAGE_URI: ${{ steps.docker-image.outputs.image_uri }}
         run: |
-          cat > ssm-parameters.json <<EOF2
+          cat > ssm-parameters.json <<EOF
           {
             "commands": [
               "set -e",
@@ -141,7 +187,7 @@ jobs:
               "docker image prune -f"
             ]
           }
-          EOF2
+          EOF
 
           COMMAND_ID=$(
             aws ssm send-command \
@@ -159,6 +205,7 @@ jobs:
             --command-id "${COMMAND_ID}" \
             --instance-id "${EC2_INSTANCE_ID}"
 
+      # 12. Show deployment output
       - name: Show EC2 deployment result
         if: always() && steps.deploy.outputs.command_id != ''
         shell: bash
