@@ -36,7 +36,7 @@ from langgraph.types import interrupt, Command
 load_dotenv(override=True)
 
 
-llm = ChatOpenAI()
+llm = ChatOpenAI(model="gpt-4.1-mini")
 
 # Embeddings model
 embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
